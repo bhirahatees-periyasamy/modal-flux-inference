@@ -1,0 +1,2 @@
+modal==1.0.5
+huggingface_hub[hf_transfer]==0.33.1
