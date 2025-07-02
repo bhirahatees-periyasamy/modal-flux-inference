@@ -3,6 +3,7 @@ import random
 import time
 from io import BytesIO
 from pathlib import Path
+from typing import Optional
 
 import modal
 import secrets
@@ -52,7 +53,7 @@ flux_image = flux_image.env(
     {
         "TORCHINDUCTOR_CACHE_DIR": "/root/.inductor-cache",
         "TORCHINDUCTOR_FX_GRAPH_CACHE": "1",
-        "HF_TOKEN" : "<hf_token>"
+        "HF_TOKEN" : "<HF_TOKEN>"
     }
 )
 
@@ -97,47 +98,62 @@ class Model:
         pipe = DiffusionPipeline.from_pretrained(
             f"black-forest-labs/FLUX.1-{VARIANT}", torch_dtype=torch.bfloat16,
         ).to("cuda")  # move model to GPU
-        pipe.load_lora_weights("<hf_repository_name>")
+        pipe.load_lora_weights("<repo>")
         self.pipe = optimize(pipe, compile=self.compile)
 
     @modal.method()
-    def inference(self, prompt: str) -> list[bytes]:
+    def inference(self ,prompt: str, seed:Optional[int]) -> list[bytes]:
         print("🎨 generating image...")
+        
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+            
+        generator = torch.Generator(device="cuda").manual_seed(seed)
+
         out = self.pipe(
             prompt,
             output_type="pil",
             num_inference_steps=NUM_INFERENCE_STEPS,
-            num_images_per_prompt=2
+            num_images_per_prompt=2,
+            generator=generator
         ).images
         result = []
         for i in out:
             byte_stream = BytesIO()
             i.save(byte_stream, format="JPEG")
             result.append(byte_stream.getvalue())
-        return result
+            
+        return {
+            "images": result,
+            "seed": seed,
+            "prompt": prompt,
+            "num_images": len(result),
+            "inference_steps": NUM_INFERENCE_STEPS,
+            "status": "success"
+        }
 
 
 @app.local_entrypoint()
 def main(
-    prompt: str = """beautiful watercolor style blue, business portrait photo Caucasian man with glasses""",
-    twice: bool = False,
+    prompt: str = """A photo of a healthy looking person. The person is smiling and is wearing a blue shirt. The background is a plain white wall.""",
     compile: bool = False,
+    seed: int = 3343934700,
 ):
     t0 = time.time()
-    image_bytes = Model(compile=compile).inference.remote(prompt)
+    result = Model(compile=compile).inference.remote(prompt, seed=seed)
     print(f"🎨 first inference latency: {time.time() - t0:.2f} seconds")
+    print(f"🎨 used seed: {result['seed']}")
+    print(f"🎨 generated {result['num_images']} images")
 
-    if twice:
-        t0 = time.time()
-        image_bytes = Model(compile=compile).inference.remote(prompt)
-        print(f"🎨 second inference latency: {time.time() - t0:.2f} seconds")
-    for image in image_bytes:
+    
+    # Save all generated images
+    for i, image_bytes in enumerate(result['images']):
         characters = string.ascii_letters + string.digits
         name = ''.join(secrets.choice(characters) for _ in range(15))
-        output_path = Path("/tmp") / "flux" / f"{name}.jpg" # Output directory
+        output_path = Path("/tmp") / "flux" / f"{name}.jpg"  # Output directory
         output_path.parent.mkdir(exist_ok=True, parents=True)
-        print(f"🎨 saving output to {output_path}")
-        output_path.write_bytes(image)
+        print(f"🎨 saving image {i+1} to {output_path}")
+        output_path.write_bytes(image_bytes)
 
 
 
