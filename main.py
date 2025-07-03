@@ -4,6 +4,7 @@ import time
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from typing import Optional
 
 import modal
 import secrets
@@ -150,7 +151,7 @@ def main(
     for i, image_bytes in enumerate(result['images']):
         characters = string.ascii_letters + string.digits
         name = ''.join(secrets.choice(characters) for _ in range(15))
-        output_path = Path("/tmp") / "flux" / f"{name}.jpg"  # Output directory
+        output_path = f"{os.getcwd}/images/output/text-2-image/{name}.jpg"  # Output directory
         output_path.parent.mkdir(exist_ok=True, parents=True)
         print(f"🎨 saving image {i+1} to {output_path}")
         output_path.write_bytes(image_bytes)
